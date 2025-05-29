@@ -88,7 +88,7 @@ def evaluate(args,traindata,massratio,model):
         df = pd.DataFrame(data=d)
         df.to_csv("Fits/"+plotname+"_fits.csv")
     else:
-        allm = False
+        allm = args.allpoints # uses more than just the first few points
         if allm:
             Tempall = torch.broadcast_to(Temp[:, None, :], (290, 500, 1)).reshape(290 * 500, 1)
             Siall = torch.broadcast_to(Si[:, None, :], (290, 500, 1)).reshape(290 * 500, 1)
@@ -111,6 +111,7 @@ def evaluate(args,traindata,massratio,model):
                  "Dsph": dsph.detach().squeeze(dim=1).numpy()}
 
         df = pd.DataFrame(data=d)
+        df = df.dropna()
         df.to_csv("Fits/"+plotname+"fits_every50th.csv")
 
         plot_Gc_functionaldependence(deff,dsph,m0[:,0,:],nucleation,plotname)
@@ -120,6 +121,7 @@ def fit_alpha(df,name,loadfile=False):
 
     pysr_model_alpha = pysr.PySRRegressor(
         niterations=500,  # < Increase me for better results
+        model_selection="best",
         binary_operators=["+", "*", "^", "/", "-"],
         unary_operators=[
             "log",
@@ -148,7 +150,8 @@ def fit_alpha(df,name,loadfile=False):
     Yfit = df.to_numpy()[:,2]
     Yexact = df.to_numpy()[:,3]
     if loadfile==False:
-        pysr_model_alpha.fit(X, Yfit)
+        pysr_model_alpha.fit(X, Yfit,
+                             variable_names = ["si","T"])
     else:
         PySRfilename = os.path.join("PySRfits",name)
         print("Loading "+PySRfilename)
@@ -156,6 +159,7 @@ def fit_alpha(df,name,loadfile=False):
 
     Ypysr = pysr_model_alpha.predict(X)
 
+    print(pysr_model_alpha)
     print(pysr_model_alpha.sympy())
 
     Si = X[:,0]
@@ -169,9 +173,10 @@ def fit_alpha(df,name,loadfile=False):
 
     return pysr_model_alpha
 
-def fit_gc(df,name):
+def fit_gc(df,name,loadfile=False):
     pysr_model_ggc = pysr.PySRRegressor(
-        niterations=100,  # < Increase me for better results
+        niterations=500,  # < Increase me for better results
+        model_selection="best",
         binary_operators=["+", "*", "^", "/", "-"],
         # binary_operators=["+", "*","/","-"],
         unary_operators=[
@@ -192,7 +197,10 @@ def fit_gc(df,name):
         extra_sympy_mappings={"inv": lambda x: 1 / x},
         # ^ Define operator for SymPy as well
         elementwise_loss="loss(prediction, target) = (prediction - target)^2",
-        verbosity=0
+        verbosity=0,
+        output_directory="PySRfits",
+        run_id=name,
+        output_torch_format=True,
         #denoise=True
         # ^ Custom loss function (julia syntax)
     )
@@ -208,11 +216,17 @@ def fit_gc(df,name):
 
     Yfit = df.to_numpy()[:,3] * 1e9  # /GGc.to_numpy()[:,5]#*1e9 #
 
-    pysr_model_ggc.fit(X, Yfit,
-                       X_units = ["ng","","","ug/m/s"],
-                       y_units = "ug/m/s",
-                       variable_names = ["m","T_scaled","si","Gc"])
+    if loadfile==False:
+        pysr_model_ggc.fit(X, Yfit,
+                           X_units = ["ng","","","ug/m/s"],
+                           y_units = "ug/m/s",
+                           variable_names = ["m","T_scaled","si","Gc"])
+    else:
+        PySRfilename = os.path.join("PySRfits",name)
+        print("Loading "+PySRfilename)
+        pysr_model_ggc=pysr.PySRRegressor.from_file(run_directory=PySRfilename)
 
+    print(pysr_model_ggc)
     print(pysr_model_ggc.sympy())
     GcSR = pysr_model_ggc.predict(X)*1e-9
     GcNN = Yfit*1e-9

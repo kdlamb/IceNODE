@@ -51,6 +51,7 @@ if __name__ == "__main__":
     parser.add_argument("--saveplots", action='store_true', help="Save plots")
     parser.add_argument("--randomseed",default=42,help="random seed (default = 42)")
     parser.add_argument("--exclude",action='store_true', help = "exclude bad experiments in training data")
+    parser.add_argument("--allpoints",action='store_true', help = "include every 50th point when fitting SR for weak case")
 
     args = parser.parse_args()
 
@@ -89,7 +90,9 @@ if __name__ == "__main__":
             model = massice(depmodel="NN").float().to(DEVICE)
         else:
             model = massice(strong=False).float().to(DEVICE)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        #model.load_state_dict(checkpoint['model_state_dict'])
+        dirpath = "/Users/karalamb/Columbia/Projects/DepositionalIce/IceSciML"
+        model.load_state_dict(torch.load(os.path.join(dirpath,"Real_weakNODE500_L2unscaled_mscaled_noharrison.pt")))
     else:
         print("Start training")
         model = trainmodels(args,traindata,massratio)
@@ -101,13 +104,22 @@ if __name__ == "__main__":
     # fit symbolic expressions
     print("Fitting symbolic expression")
     if args.strong == True:
-        learnedfunction = fit_alpha(df,name,loadfile=args.loadSR)
+        pysrmodule = fit_alpha(df,name,loadfile=args.loadSR)
     else:
-        learnedfunction = fit_gc(df,name)
+        if args.allpoints:
+            name = name+"_allpoints"
+        pysrmodule = fit_gc(df,name,loadfile=args.loadSR)
 
     # print off interpolation and extrapolation results for models (Table 1)
     print("Comparing models")
-    evaluate_models(args,traindata,massratio,model,learnedfunction)
+    nsr = len(pysrmodule.equations_)
+
+    for i in range(1,nsr): # ignore the 1st in case it is a constant.
+        print(i,pysrmodule.equations_['score'][i],pysrmodule.equations_['loss'][i],pysrmodule.equations_['complexity'][i])
+        print(pysrmodule.sympy(i))
+
+        learnedfunction = pysrmodule.pytorch(i)
+        evaluate_models(args,traindata,massratio,model,learnedfunction)
 
     # comparison with AIDA experiments
 

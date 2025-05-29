@@ -262,28 +262,38 @@ class dmidt(nn.Module):
         # same as used in parcel model
         ka = (5.69 + 0.017 * (T - 273.15)) * 1e-3 * self.JOULES_IN_A_CAL
         return ka
-class learnedgc(nn.Module):
+class learnedgeff(nn.Module):
     def __init__(self, learnedfunction=None):
-        super(learnedgc, self).__init__()
-        self.learnedgc = learnedfunction
+        super(learnedgeff, self).__init__()
+        # this is a helper function to take in the pysr output and reshape/rescale inputs for the dmidtNN model
+        self.learnedgeff = learnedfunction
 
-    def forward(self, m, S, T):
-        # this is a helper function to take in the pysr output and reshape inputs/outputs for the dmidtNN model
-        x = torch.concatenate((m,S,T),dim=1)
+    def forward(self, m, S, T, Gc):
+        # rescalings
+        # scale these the same as the NN?
 
-        gc = self.learnedgc(x)
+        m_scaled = m*1e12
+        T_scaled = T/273.15
+        si_scaled = S - 1.0
+        Gc_scaled = Gc*1e9
 
-        return gc.unsqueeze(dim=1)
+        x = torch.concatenate((m_scaled,T_scaled,si_scaled,Gc_scaled),dim=1)
+
+        g_scaled = self.learnedgeff(x)
+
+        geff = g_scaled*1e-9
+
+        return geff.unsqueeze(dim=1)
 class dmidtNN(nn.Module):
-    def __init__(self, input_dim=3, output_dim=1,gcmodel=None,learnedfunction=None):
+    def __init__(self, input_dim=3, output_dim=1,geffmodel=None,learnedfunction=None):
         super(dmidtNN, self).__init__()
 
         self.nh = 20 # was 20
         #self.min = 5.0  # minimum exponent for alpha
 
         # for loading in the PySR symbolic expression
-        self.gcmodel = gcmodel
-        self.learnedgc = learnedgc(learnedfunction=learnedfunction)
+        self.geffmodel = geffmodel
+        self.learnedgeff = learnedgeff(learnedfunction=learnedfunction)
 
         self.layers = nn.Sequential(
             nn.Linear(input_dim, self.nh), nn.ReLU(),
@@ -324,10 +334,12 @@ class dmidtNN(nn.Module):
     def forward(self, m, T, S):
         # do the normalization here
         rcurr = (3 * m / (4 * math.pi * self.RHOICE)) ** (1 / 3)
-        if self.gcmodel=="SR":
-            Deff = self.learnedgc(m,T,S)
-        else:
-            Deff, Deffsph = self.getdeff(m, T, S)
+
+        Deff, Deffsph = self.getdeff(m, T, S)
+
+        if self.geffmodel == "SR":
+            Deff = self.learnedgeff(m, T, S, Deffsph)
+
         dmidt = Deff * (S.float() - 1.0) * rcurr * 4 * math.pi
 
         return dmidt
@@ -387,7 +399,7 @@ class dmidtNN(nn.Module):
 
 # for a single ice crystal
 class massice(nn.Module):
-    def __init__(self, ode_method="rk4", depmodel="nelson", sc="h2016", gcmodel=None,strong=True, m=1, c=0.5,learnedfunction=None):
+    def __init__(self, ode_method="rk4", depmodel="nelson", sc="h2016", geffmodel=None,strong=True, m=1, c=0.5,learnedfunction=None):
         super(massice, self).__init__()
 
         self.Temp = None
@@ -398,7 +410,7 @@ class massice(nn.Module):
         if strong == True:
             self.dmidt = dmidt(depmodel=depmodel, sc=sc, m=m, c=c,learnedfunction=learnedfunction)
         else:
-            self.dmidt = dmidtNN(gcmodel=gcmodel,learnedfunction=learnedfunction)
+            self.dmidt = dmidtNN(geffmodel=geffmodel,learnedfunction=learnedfunction)
     def forward(self, z0, ts, Temp, Si):
 
         self.Temp = Temp

@@ -22,6 +22,7 @@ def getname(args):
     name = "{}_{}_{:04d}".format(synreal, sw, args.num_iterations)
     if args.exclude:
         name = name+"_excluded"
+
     print(name)
     return name
 class SubsetWithAttrs(Dataset):

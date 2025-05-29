@@ -20,7 +20,7 @@ def getsyntheticdata(traindata,nonoise=False,saveplots=False):
 
     nexps = len(traindata)
     #print(nexps)
-    maxexplength = 1000
+    maxexplength = 1500
 
     # exact values
     RHOICE = 910.0

@@ -34,7 +34,7 @@ from models import massice
 from data_utils import getname
 
 
-def evaluate_models(args, traindata, massratio_real, model, pysrmodule, comparisonmodel=None, comparisonname=None):
+def evaluate_models(args, traindata, massratio_real, model, learnedfunction, comparisonmodel=None, comparisonname=None):
     #
     nexps = len(traindata)
     maxexplength = args.maxexplength
@@ -61,9 +61,7 @@ def evaluate_models(args, traindata, massratio_real, model, pysrmodule, comparis
     mselosses = np.zeros((nlengths,nmodels))
     lossesbyexps = np.zeros((nexps,nlengths,nmodels))
 
-    # pysr
-    learnedfunction = pysrmodule.pytorch()
-
+    # write this more efficiently -- just do the integration once and check the loss at different lengths.
     for i in range(0,nlengths):
         evallength = evallengths[i]
         time = torch.arange(0, evallength, 1).float()
@@ -96,7 +94,7 @@ def evaluate_models(args, traindata, massratio_real, model, pysrmodule, comparis
             massratios.append(massratios_SR)
             modelnames.append("Best SR")
         else:
-            model_SR = massice(gcmodel="SR",learnedfunction=learnedfunction).float().to(DEVICE)
+            model_SR = massice(geffmodel="SR",learnedfunction=learnedfunction,strong=False).float().to(DEVICE)
             mass_SR = model_SR(m0.to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si).detach()
             m0s = m0.unsqueeze(dim=2).expand(mass_SR.shape)
             massratios_SR = (mass_SR.cpu().detach() / m0s)[:, :, 0]
@@ -127,7 +125,7 @@ def evaluate_models(args, traindata, massratio_real, model, pysrmodule, comparis
     df = pd.DataFrame(mselosses.T, index=modelnames, columns=evallengths)
     df["# Best (500)"] = bestexps
     df["% Best (500)"] = 100*bestexps/nexps
-    pd.options.display.float_format = '{:.0f}'.format
+    pd.options.display.float_format = '{:.2f}'.format
     print(df)
 
 
