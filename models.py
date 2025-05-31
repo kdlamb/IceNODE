@@ -2,65 +2,17 @@ import math
 import pandas as pd
 import torch
 import numpy as np
+from erfa import gc2gd
 from torch import nn
 from torchdiffeq import odeint
 from tqdm import tqdm
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-#torch.manual_seed(42)
+from constants import constants,expranges
 
-# values determined from experimental data
-minTemp = 207.64999999999998
-Temprange = 29.19999999999999
-minSi = 1.005
-Sirange = 0.7530000000000001
-minm0 = -28.301211798926495 #log(min(m0))
-maxm0 = -19.465152924804006 #log(50*min(m0))
-m0range = maxm0 - minm0
 
-class alphaNN(nn.Module):
-    def __init__(self, input_dim=2, output_dim=1):
-        super(alphaNN, self).__init__()
-
-        self.nh = 20
-        self.min = 5.0  # minimum exponent for alpha
-
-        self.layers = nn.Sequential(
-            nn.Linear(input_dim, self.nh), nn.ReLU(),
-            nn.Linear(self.nh, self.nh), nn.ReLU(), )
-
-        self.lin = nn.Linear(self.nh, output_dim)
-        torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
-        torch.nn.init.ones_(self.lin.bias)
-        self.minTemp = minTemp
-        self.Temprange = Temprange
-        self.minSi = minSi
-        self.Sirange = Sirange
-
-    def forward(self, S, T):
-        # do the normalization here
-        Tscaled = (T.float() - self.minTemp) / self.Temprange
-        RHscaled = (S.float() - self.minSi) / self.Sirange
-        x = torch.concatenate((Tscaled, RHscaled), dim=1)
-
-        alpha = nn.Sigmoid()(self.lin(self.layers(x)))
-        logalpha = (alpha - 1.0) * self.min
-
-        return alpha  # logalpha
-class linearalpha(nn.Module):
-    def __init__(self, c=0.5):
-        super(linearalpha, self).__init__()
-        self.c = c
-        self.minTemp = minTemp
-        self.Temprange = Temprange
-        self.minSi = minSi
-        self.Sirange = Sirange
-
-    def forward(self, S, T):
-        alpha = self.c * (S - self.minSi) / self.Sirange + (1.0 - self.c) * (T - self.minTemp) / self.Temprange
-
-        return alpha
+# alpha models
 class constantalpha(nn.Module):
     def __init__(self, c=1.0):
         super(constantalpha, self).__init__()
@@ -70,6 +22,7 @@ class constantalpha(nn.Module):
         alpha = self.c
 
         return torch.nn.Parameter(torch.tensor([alpha]), requires_grad=True)
+
 class alphanelson(nn.Module):
     def __init__(self, sc="h2016", m=1):
         super(alphanelson, self).__init__()
@@ -137,163 +90,14 @@ class alphanelson(nn.Module):
         sa = sa / 100.0
 
         return sc
-class learnedalpha(nn.Module):
-    def __init__(self, learnedfunction=None):
-        super(learnedalpha, self).__init__()
+class alphaNN(nn.Module):
+    def __init__(self, input_dim=2, output_dim=1, nhidden=20, learnedfunction=None):
+        super(alphaNN, self).__init__()
+
         self.learnedalpha = learnedfunction
 
-    def forward(self, S, T):
-        # this is a helper function to take in the pysr output and reshape inputs/outputs for the dmidt model
-        x = torch.concatenate((S,T),dim=1)
-
-        alpha = self.learnedalpha(x)
-
-        return alpha.unsqueeze(dim=1)
-# the capacitance model, with alpha as an unknown function of temperature and supersaturation
-class dmidt(nn.Module):
-    def __init__(self, depmodel="nelson", sc="h2016", m=1, c=0.5,learnedfunction=None):
-        super(dmidt, self).__init__()
-
-        if depmodel == "nelson":
-            self.alpha = alphanelson(sc=sc, m=m)
-        elif depmodel == "NN":
-            self.alpha = alphaNN()
-        elif depmodel == "linear":
-            # here c is the slope parameter for the linear function
-            self.alpha = linearalpha(c=c)
-        elif depmodel == "SR":
-            # for loading back in the symbolic regression model
-            self.alpha = learnedalpha(learnedfunction=learnedfunction)
-        else:  # here c is the constant alpha value
-            self.alpha = constantalpha(c=c)
-
-        self.amax = -5.0  # maximum exp. for m0 (i.e. m0 = 1e-12 kg)
-        self.amin = 3.0  # minimum exp. for m0 (i.e. m0 = 1e-16 kg)
-
-        # constants
-        self.ALPHA_THERM_ICE = 1.0
-
-        self.RH_EQ = 1.0
-        self.RHOICE = 910.0  # density of ice (kg/m3)
-
-        self.FV = 1.0
-        self.FH = 1.0
-
-        self.R = 8.3144521  # J/(mole/K) - universal gas constant
-        self.RV = 461.51  # individual gas constant of water vapor - J/kg/K
-        self.RA = 287.05  # individual gas constant of air (Rg/Mgas) - J/kg/K
-
-        self.CP = 1005  #
-        self.LS = 2.837e6  # Latent heat of sublimation (J/kg)
-        self.mw = 18e-3  # molecular weight of water in kg
-
-        # from Pruppacher and Klett 13-14 and 13-20
-        self.lambdaa = 8e-8  # m (8e-6 cm)
-        self.deltav = 1.3 * self.lambdaa
-
-        self.deltat = 2.16e-7  # m (2.16e-5cm)
-
-        self.JOULES_IN_A_CAL = 4.187
-        self.P = 97190
-
-    def forward(self, x, Temp, Si):
-
-        m0 = x
-        RH_ICE = Si
-        T = Temp
-        P = self.P
-
-        ALPHA_DEP = self.alpha(RH_ICE, T)
-
-        RAD = (3 * m0 / (4 * math.pi * self.RHOICE)) ** (1 / 3)
-        RHOA = P / self.RA / T  # density of air
-
-        D1 = self.Diff(T, P)  # diffusivity of water vapour in air
-        K1 = self.KA(T)  # thermal conductivity of air
-
-        DSTAR = D1 * self.FV / (
-                    RAD / (RAD + self.deltav) + D1 * self.FV / RAD / ALPHA_DEP * torch.sqrt(2 * np.pi / self.RV / T))
-        # print(DSTAR.shape,ALPHA_DEP.shape,D1.shape,K1.shape,RAD.shape)
-        KSTAR = K1 * self.FH / (
-                    RAD / (RAD + self.deltat) + K1 * self.FH / RAD / self.ALPHA_THERM_ICE / self.CP / RHOA * torch.sqrt(
-                2 * np.pi / self.RA / T))
-
-        ICEGROWTHRATE = self.R * T / (self.svp_ice(T) * DSTAR * self.mw)
-        ICEGROWTHRATE = ICEGROWTHRATE + self.LS / (KSTAR * T) * (self.LS * self.mw / (self.R * T) - 1)
-
-        dmidt = 4e0 * np.pi * RAD * (RH_ICE - self.RH_EQ) / ICEGROWTHRATE
-
-        return dmidt
-
-    def alphas(self, Temp, Si):
-        RH_ICE = Si
-        T = Temp
-
-        ALPHA_DEP = self.alpha(RH_ICE, T)
-        return ALPHA_DEP
-
-    def svp_ice(self, T):
-        """saturation vapour pressure over ice """
-        # the version used in the ACPIM code
-        # svp = 100*6.1115e0*torch.exp((23.036e0 - (T-273.15)/333.7e0)*(T-273.15)/(279.82e0 + (T-273.15)))
-
-        # Murphy and Koop, 2005 - same as the parcel model
-        # saturation vapor pressure over ice, after Murphy and Koop (2005), in Pa
-        # T>110 K
-        # temp - K, vp_ice - hPa
-        a0 = 9.550426
-        a1 = 5723.265
-        a2 = 3.53068
-        a3 = 0.00728332
-
-        svp = torch.exp(a0 - a1 / T + a2 * torch.log(T) - a3 * T)
-
-        return svp
-
-    def Diff(self, T, P):
-        """Diffusion of water vapour in air"""
-        # same as used in parcel model
-        D1 = 2.11e-5 * (T / 273.15) ** 1.94 * (101325 / P)
-
-        return D1
-
-    def KA(self, T):
-        """Thermal conductivity of air"""
-        # same as used in parcel model
-        ka = (5.69 + 0.017 * (T - 273.15)) * 1e-3 * self.JOULES_IN_A_CAL
-        return ka
-class learnedgeff(nn.Module):
-    def __init__(self, learnedfunction=None):
-        super(learnedgeff, self).__init__()
-        # this is a helper function to take in the pysr output and reshape/rescale inputs for the dmidtNN model
-        self.learnedgeff = learnedfunction
-
-    def forward(self, m, S, T, Gc):
-        # rescalings
-        # scale these the same as the NN?
-
-        m_scaled = m*1e12
-        T_scaled = T/273.15
-        si_scaled = S - 1.0
-        Gc_scaled = Gc*1e9
-
-        x = torch.concatenate((m_scaled,T_scaled,si_scaled,Gc_scaled),dim=1)
-
-        g_scaled = self.learnedgeff(x)
-
-        geff = g_scaled*1e-9
-
-        return geff.unsqueeze(dim=1)
-class dmidtNN(nn.Module):
-    def __init__(self, input_dim=3, output_dim=1,geffmodel=None,learnedfunction=None):
-        super(dmidtNN, self).__init__()
-
-        self.nh = 20 # was 20
-        #self.min = 5.0  # minimum exponent for alpha
-
-        # for loading in the PySR symbolic expression
-        self.geffmodel = geffmodel
-        self.learnedgeff = learnedgeff(learnedfunction=learnedfunction)
+        self.nh = nhidden
+        self.min = 5.0  # minimum exponent for alpha
 
         self.layers = nn.Sequential(
             nn.Linear(input_dim, self.nh), nn.ReLU(),
@@ -302,69 +106,166 @@ class dmidtNN(nn.Module):
         self.lin = nn.Linear(self.nh, output_dim)
         torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
         torch.nn.init.ones_(self.lin.bias)
-        self.minTemp = minTemp
-        self.Temprange = Temprange
-        self.minSi = minSi
-        self.Sirange = Sirange
 
+    def forward(self, S, T):
+        # do the normalization here
+        Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
+        RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
+        x = torch.concatenate((Tscaled, RHscaled), dim=1)
 
-        # self.massrange = 1e-10
-        self.minm0 = minm0
-        self.maxm0 = maxm0
-        self.m0range = maxm0 - minm0
+        if self.learnedalpha is not None:
+            alpha = self.learnedalpha(x)
+            alpha = alpha.unsqueeze(dim=1)
+        else:
+            alpha = nn.Sigmoid()(self.lin(self.layers(x)))
+            # logalpha = (alpha - 1.0) * self.min
 
-        self.rrange = 1e-6
+        return alpha
+class dtermNN(nn.Module):
+    def __init__(self, input_dim=3, output_dim=1, nhidden=20, learnedfunction=None):
+        super(dtermNN, self).__init__()
+        # this is a helper function to take in the pysr output and reshape/rescale inputs for the dmidtNN model
+        self.learneddterm = learnedfunction
+        self.dterm = dterm()
 
-        self.RH_EQ = 1.0
-        self.RHOICE = 910.0  # density of ice (kg/m3)
+        self.nh = nhidden
 
-        self.FV = 1.0
-        self.FH = 1.0
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, self.nh), nn.ReLU(),
+            nn.Linear(self.nh, self.nh), nn.ReLU(), )
 
-        self.R = 8.3144521  # J/(mole/K) - universal gas constant
-        self.RV = 461.51  # individual gas constant of water vapor - J/kg/K
-        self.RA = 287.05  # individual gas constant of air (Rg/Mgas) - J/kg/K
-
-        self.CP = 1005  #
-        self.LS = 2.837e6  # Latent heat of sublimation (J/kg)
-        self.mw = 18e-3  # molecular weight of water in kg
-        self.JOULES_IN_A_CAL = 4.187
-        self.P = 97190
+        self.lin = nn.Linear(self.nh, output_dim)
+        torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
+        torch.nn.init.ones_(self.lin.bias)
 
     def forward(self, m, T, S):
-        # do the normalization here
-        rcurr = (3 * m / (4 * math.pi * self.RHOICE)) ** (1 / 3)
+        # rescalings
+        # scale these the same as the NN?
 
-        Deff, Deffsph = self.getdeff(m, T, S)
+        Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
+        RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
+        mscaled = (torch.log(m).float() - expranges.minm0) / expranges.m0range
 
-        if self.geffmodel == "SR":
-            Deff = self.learnedgeff(m, T, S, Deffsph)
-
-        dmidt = Deff * (S.float() - 1.0) * rcurr * 4 * math.pi
-
-        return dmidt
-
-    def getdeff(self, m, T, S):
-        # do the normalization here
-        Tscaled = (T.float() - self.minTemp) / self.Temprange
-        RHscaled = (S.float() - self.minSi) / self.Sirange
-        mscaled = (torch.log(m).float() - self.minm0) / self.m0range
-        # print(mscaled[0:2],self.minm0,self.m0range)
-        #rscaled = r.float() / self.rrange
         x = torch.concatenate((mscaled, Tscaled, RHscaled), dim=1)
-        # x = torch.concatenate((Tscaled,RHscaled),dim=1)
-        P = self.P
+
+        D, K = self.dterm(m, T, S)
+        if self.learneddterm is not None:
+            Dtermratio = self.learneddterm(x).unsqueeze(dim=1)
+        else:
+            Dtermratio = (nn.Sigmoid()(self.lin(self.layers(x)))) * 2.0  # 20.0
+            #Dtermratio = (nn.Softplus()(self.lin(self.layers(x))))
+
+        return Dtermratio * D, K
+class geffNN(nn.Module):
+    def __init__(self, input_dim=3, output_dim=1, nhidden=20, learnedfunction=None):
+        super(geffNN, self).__init__()
+        # this is a helper function to take in the pysr output and reshape/rescale inputs for the dmidtNN model
+        self.learnedgeff = learnedfunction
+        self.gsph = geffmodel(dtermmodel="diffusive")
+
+        self.nh = nhidden
+
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, self.nh), nn.ReLU(),
+            nn.Linear(self.nh, self.nh), nn.ReLU(), )
+
+        self.lin = nn.Linear(self.nh, output_dim)
+        torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
+        torch.nn.init.ones_(self.lin.bias)
+
+    def forward(self, m, T, S):
+        # rescalings
+        # scale these the same as the NN?
+
+        Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
+        RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
+        mscaled = (torch.log(m).float() - expranges.minm0) / expranges.m0range
+        #print(torch.min(T),torch.min(S),torch.min(m))
+        #print(torch.min(Tscaled),torch.min(RHscaled),torch.min(mscaled))
+        x = torch.concatenate((mscaled, Tscaled, RHscaled), dim=1)
+
+        if self.learnedgeff is not None:
+            Geffratio = self.learnedgeff(x).unsqueeze(dim=1)
+        else:
+            Geffratio = (nn.Sigmoid()(self.lin(self.layers(x)))) * 2.0  # 20.0
+
+        return Geffratio*self.gsph(m, T, S)
+class dterm(nn.Module):
+    def __init__(self, translational=False, depmodel="nelson", sc="h2016", m=1, c=0.5, learnedfunction=None):
+        super(dterm, self).__init__()
+
+        # continuum or translational case
+        self.translational = translational
+
+        # deposition model
+        if depmodel == "nelson":
+            self.alpha = alphanelson(sc="h2016", m=1)
+        elif depmodel == "NN":
+            self.alpha = alphaNN()
+        elif depmodel == "SR":
+            # for loading back in the symbolic regression model
+            self.alpha = alphaNN(learnedfunction=learnedfunction)
+        else:  # here c is the constant alpha value
+            self.alpha = constantalpha(c=c)
+
+    def forward(self, m, T, S):
+
+        P = constants.P
+        ALPHA_DEP = self.alpha(S, T)
+
+        RAD = (3 * m / (4 * math.pi * constants.RHOICE)) ** (1 / 3)
+        RHOA = P / constants.RA / T  # density of air
+
         D1 = self.Diff(T, P)  # diffusivity of water vapour in air
         K1 = self.KA(T)  # thermal conductivity of air
 
-        ICEGROWTHRATE = self.R * T / (self.svp_ice(T) * D1 * self.mw)
-        ICEGROWTHRATE = ICEGROWTHRATE + self.LS / (K1 * T) * (self.LS * self.mw / (self.R * T) - 1)
+        if self.translational == True:
+            D = D1 * constants.FV / (RAD / (RAD + constants.deltav) + D1 * constants.FV / RAD / ALPHA_DEP * torch.sqrt(
+                2 * np.pi / constants.RV / T))
+            K = K1 * constants.FH / (RAD / (RAD + constants.deltat) + K1 * constants.FH / RAD /
+                                     constants.ALPHA_THERM_ICE / constants.CP / RHOA * torch.sqrt(
+                        2 * np.pi / constants.RA / T))
+        else:
+            D = D1
+            K = K1
 
-        Deffratio = (nn.Sigmoid()(self.lin(self.layers(x)))) * 2.0  # 20.0
-        Deffsph = 1.0 / ICEGROWTHRATE
-        Deff = Deffratio * Deffsph
+        return D, K
+    def Diff(self, T, P):
+        """Diffusion of water vapour in air"""
+        # same as used in parcel model
+        D1 = 2.11e-5 * (T / 273.15) ** 1.94 * (101325 / P)
+        return D1
+    def KA(self, T):
+        """Thermal conductivity of air"""
+        # same as used in parcel model
+        ka = (5.69 + 0.017 * (T - 273.15)) * 1e-3 * constants.JOULES_IN_A_CAL
+        return ka
+class geffmodel(nn.Module):
+    def __init__(self, dtermmodel="diffusive", depmodel="nelson", sc="h2016", m=1, c=0.5, learnedfunction=None):
+        super(geffmodel, self).__init__()
 
-        return Deff, Deffsph
+        # medium case
+        if dtermmodel == "diffusive":
+            self.dtermmodel = dterm()
+        elif dtermmodel == "translational":
+            self.dtermmodel = dterm(translational=True, depmodel=depmodel, sc=sc, m=m, c=c,
+                                    learnedfunction=learnedfunction)
+        elif dtermmodel == "NN":
+            self.dtermmodel = dtermNN()
+        elif dtermmodel == "SR":
+            self.dtermmodel = dtermNN(learnedfunction=learnedfunction)
+
+    def forward(self, m, T, S):
+
+        RAD = (3 * m / (4 * math.pi * constants.RHOICE)) ** (1 / 3)
+        D, K = self.dtermmodel(m, T, S)
+
+        ICEGROWTHRATE = constants.R * T / (self.svp_ice(T) * D * constants.mw)
+        ICEGROWTHRATE = ICEGROWTHRATE + constants.LS / (K * T) * (constants.LS * constants.mw / (constants.R * T) - 1)
+
+        gterm = 1 / ICEGROWTHRATE
+
+        return gterm
 
     def svp_ice(self, T):
         """saturation vapour pressure over ice """
@@ -383,39 +284,58 @@ class dmidtNN(nn.Module):
         svp = torch.exp(a0 - a1 / T + a2 * torch.log(T) - a3 * T)
 
         return svp
+# the capacitance model, with alpha as an unknown function of temperature and supersaturation
+class dmidt(nn.Module):
+    def __init__(self, gmodel="spherical", dtermmodel="diffusive", depmodel="nelson", sc="h2016", m=1, c=0.5,
+                 learnedfunction=None):
+        super(dmidt, self).__init__()
 
-    def Diff(self, T, P):
-        """Diffusion of water vapour in air"""
-        # same as used in parcel model
-        D1 = 2.11e-5 * (T / 273.15) ** 1.94 * (101325 / P)
+        if gmodel == "spherical":
+            self.gmodel = geffmodel()
+        elif gmodel == "translational":
+            self.gmodel = geffmodel(dtermmodel=dtermmodel, depmodel=depmodel, sc=sc, m=m, c=c,
+                                    learnedfunction=learnedfunction)
+        elif gmodel == "NN":
+            self.gmodel = geffNN()
+        elif gmodel == "SR":  # substitute in the learned symbolic regression expression
+            self.gmodel = geffNN(learnedfunction=learnedfunction)
 
-        return D1
+    def forward(self, m, T, S):
 
-    def KA(self, T):
-        """Thermal conductivity of air"""
-        # same as used in parcel model
-        ka = (5.69 + 0.017 * (T - 273.15)) * 1e-3 * self.JOULES_IN_A_CAL
-        return ka
+        RAD = (3 * m / (4 * math.pi * constants.RHOICE)) ** (1 / 3)
+        geff = self.gmodel(m, T, S)
 
-# for a single ice crystal
+        dmidt = 4e0 * np.pi * RAD * (S - 1.0) * geff
+
+        return dmidt
+    # for a single ice crystal
 class massice(nn.Module):
-    def __init__(self, ode_method="rk4", depmodel="nelson", sc="h2016", geffmodel=None,strong=True, m=1, c=0.5,learnedfunction=None):
+    def __init__(self, ode_method="rk4", physics="strong", gmodel="spherical", dtermmodel="diffusive",
+                 depmodel="nelson",
+                 sc="h2016", m=1, c=0.5, learnedfunction=None):
         super(massice, self).__init__()
 
         self.Temp = None
         self.Si = None
-        self.P = None
 
         self.method = str(ode_method)
-        if strong == True:
-            self.dmidt = dmidt(depmodel=depmodel, sc=sc, m=m, c=c,learnedfunction=learnedfunction)
-        else:
-            self.dmidt = dmidtNN(geffmodel=geffmodel,learnedfunction=learnedfunction)
+        if physics == "strong":
+            self.dmidt = dmidt(gmodel="translational",
+                               dtermmodel="translational",
+                               depmodel=depmodel, sc=sc, m=m, c=c,
+                               learnedfunction=learnedfunction)
+        elif physics == "medium":
+            self.dmidt = dmidt(gmodel="translational",
+                               dtermmodel=dtermmodel,
+                               learnedfunction=learnedfunction)
+        else:  # weak constraint
+            self.dmidt = dmidt(gmodel=gmodel,
+                               learnedfunction=learnedfunction)
+
     def forward(self, z0, ts, Temp, Si):
 
-        self.Temp = Temp
+        self.Temp = Temp  # +self.dT
         self.Si = Si
-
 
         zs = odeint(self.eval_kernel, z0, ts, method=self.method)
         zs.transpose_(0, 1)
@@ -424,6 +344,6 @@ class massice(nn.Module):
         return zs
 
     def eval_kernel(self, t, z):
-        z = self.dmidt(z, self.Temp, self.Si)  # this is dmidt
+        z = self.dmidt(z, self.Temp, self.Si)
 
         return z

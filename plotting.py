@@ -159,6 +159,27 @@ def plot_Gc_fits(GcNN,GcPySR,mass,name):
 
     plt.savefig("Figures/GLearned"+name+".png")
     plt.close()
+def plot_dterm_fits(DcNN,DcPySR,mass,name):
+
+    fig = plt.figure(figsize=(6, 5))
+    plt.title("NODE model vs. symbolic regression")
+    plt.scatter(DcNN,DcPySR, c=mass, norm=matplotlib.colors.LogNorm())
+
+    plt.yscale("log")
+    plt.xscale("log")
+    plt.plot(np.linspace(0, 3) * 1e-5, np.linspace(0, 3) * 1e-5, color="k", linestyle="dashed")
+    plt.xlim(1e-5, 3.0e-5)
+    plt.ylim(1e-5, 3.0e-5)
+
+    cbar = plt.colorbar(label="Mass (kg)")
+    cbar.ax.set_ylabel('Mass (kg)', fontsize=14)
+    plt.xlabel(r"$D = D_{c}f_{D}(m,S,T|\theta_{D})$", fontsize=18)
+    plt.ylabel(r"$d$, Symbolic Regression", fontsize=18)
+    plt.tick_params(axis="both", which="major", labelsize=14)
+    plt.tight_layout()
+
+    plt.savefig("Figures/DLearned"+name+".png")
+    plt.close()
 def plot_Gc_functionaldependence(Geff,Gc,mass,nucleation,name):
     idx0 = np.where(nucleation[:, 0] == 0)  # hetereogenous
     idx1 = np.where(nucleation[:, 0] == 1)  # homogeneous
@@ -183,4 +204,29 @@ def plot_Gc_functionaldependence(Geff,Gc,mass,nucleation,name):
     plt.legend(frameon=False, loc='upper left', fontsize=12)
     plt.tight_layout()
     plt.savefig("Figures/Gfunction"+name+".png")
+    plt.close()
+def plot_Dterm_functionaldependence(Deff,Dc,mass,nucleation,name):
+    idx0 = np.where(nucleation[:, 0] == 0)  # hetereogenous
+    idx1 = np.where(nucleation[:, 0] == 1)  # homogeneous
+
+    plt.scatter(Dc[:, 0].detach()[idx1], Deff[:, 0].detach()[idx1], c=mass[idx1], marker="o",
+                label="Homogeneous", norm=matplotlib.colors.LogNorm())
+
+    cbar = plt.colorbar(label="Mass (kg)")
+    cbar.ax.set_ylabel('Mass (kg)', fontsize=14)
+    plt.scatter(Dc[:, 0].detach()[idx0], Deff[:, 0].detach()[idx0], c=mass[idx0], marker="s",
+                norm=matplotlib.colors.LogNorm())
+    plt.scatter(Dc[:, 0].detach()[idx0], Deff[:, 0].detach()[idx0], marker="s", label="Heterogeneous",
+                facecolor='none', edgecolor='k')
+    #plt.xlim(3e-11, 7e-9)
+    #plt.ylim(3e-11, 7e-9)
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.ylabel(r"$D$", fontsize=18)
+    plt.xlabel(r"$D_{c}$", fontsize=18)
+    plt.tick_params(axis="both", which="major", labelsize=14)
+    plt.plot(Dc[:, 0].detach(), Dc[:, 0].detach(), linestyle="dashed", color='k')
+    plt.legend(frameon=False, loc='upper left', fontsize=12)
+    plt.tight_layout()
+    plt.savefig("Figures/Dfunction"+name+".png")
     plt.close()

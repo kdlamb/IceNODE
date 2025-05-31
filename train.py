@@ -29,6 +29,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 from data_utils import levdiffdata, SSA, getname
 from synthetic_data import getsyntheticdata
 from models import massice
+from constants import constants
 
 def cosine_decay(learning_rate, global_step, decay_steps, alpha=0.0):
     global_step = min(global_step, decay_steps)
@@ -68,8 +69,7 @@ def trainmodels(args,traindata,massratio):
     P = traindata.P.unsqueeze(dim=1).float().to(DEVICE)
     r0 = traindata.r0
 
-    RHOICE = 910.0
-    m0 = 4 / 3 * math.pi * RHOICE * r0 ** 3
+    m0 = 4 / 3 * math.pi * constants.RHOICE * r0 ** 3
     m0 = m0.unsqueeze(dim=1)
     time = torch.arange(0, maxexplength, 1).float()
     #print(maxexplength)
@@ -86,11 +86,15 @@ def trainmodels(args,traindata,massratio):
     losses = []
     bestfits = np.zeros((nexps, num_iterations, maxexplength))
 
-    if args.strong == True: # strong form of the model
-        model = massice(depmodel="NN").float().to(DEVICE)
-    else:
-        model = massice(strong=False).float().to(DEVICE)
-        #model = massiceGG().float().to(DEVICE)
+    if args.physics == "strong": # strong form of the model
+        print("Using strong physics constraint")
+        model = massice(physics=args.physics,depmodel="NN").float().to(DEVICE)
+    elif args.physics == "medium": # fit dterm
+        print("Using medium physics constraint")
+        model = massice(physics=args.physics,dtermmodel="NN").float().to(DEVICE)
+    else: # weak - fit G transfer coefficient
+        print("Using weak physics constraint")
+        model = massice(physics=args.physics,gmodel="NN").float().to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=base_lr)
 
@@ -120,21 +124,22 @@ def trainmodels(args,traindata,massratio):
 
         losses.append(loss.item())
 
-        if itr%10 == 0:
+        if itr%(int(args.num_iterations/10)) == 0:
             print(itr, loss.item(), lr)
 
-    if args.synthetic:
-        synreal = "Synthetic"
-    else:
-        synreal = "Real"
-    if args.strong:
-        sw = "Strong"
-    else:
-        sw = "Weak"
-
-    #name = "{}_{}_{:04d}".format(synreal, sw,args.num_iterations)
-    #print(name)
+    # if args.synthetic:
+    #     synreal = "Synthetic"
+    # else:
+    #     synreal = "Real"
+    # if args.strong:
+    #     sw = "Strong"
+    # else:
+    #     sw = "Weak"
+    #
+    # #name = "{}_{}_{:04d}".format(synreal, sw,args.num_iterations)
+    # #print(name)
     name = getname(args)
+    print(name)
 
     lossfigname = "Figures/Losses_"+name+".png"
     checkpointname = "Checkpoints/Checkpoint_"+name+".pt"
@@ -145,6 +150,7 @@ def trainmodels(args,traindata,massratio):
     plt.ylabel("MSE Loss")
     plt.legend()
     plt.savefig(lossfigname)
+    plt.close()
 
     checkpoint = {
         'num_iterations': args.num_iterations,

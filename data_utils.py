@@ -14,12 +14,8 @@ def getname(args):
         synreal = "Synthetic"
     else:
         synreal = "Real"
-    if args.strong:
-        sw = "Strong"
-    else:
-        sw = "Weak"
 
-    name = "{}_{}_{:04d}".format(synreal, sw, args.num_iterations)
+    name = "{}_{}_{:04d}".format(synreal, args.physics, args.num_iterations)
     if args.exclude:
         name = name+"_excluded"
 

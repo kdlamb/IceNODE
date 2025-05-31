@@ -14,6 +14,7 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from data_utils import SSA
 from models import massice
 from plotting import plotsynthetic, plotsynoverview
+from constants import constants
 
 def getsyntheticdata(traindata,nonoise=False,saveplots=False):
     #traindata = torch.load('Data/LevData.pth')
@@ -22,9 +23,6 @@ def getsyntheticdata(traindata,nonoise=False,saveplots=False):
     #print(nexps)
     maxexplength = 1500
 
-    # exact values
-    RHOICE = 910.0
-
     massratio = traindata.massratio
     Temp = traindata.T.unsqueeze(dim=1).to(DEVICE)
     Si = traindata.Si.unsqueeze(dim=1).to(DEVICE)
@@ -32,22 +30,24 @@ def getsyntheticdata(traindata,nonoise=False,saveplots=False):
 
     r0 = traindata.r0
 
-    m0 = 4 / 3 * math.pi * RHOICE * r0 ** 3
+    m0 = 4 / 3 * math.pi * constants.RHOICE * r0 ** 3
     m0 = m0.unsqueeze(dim=1).to(DEVICE)
     time = torch.arange(0, maxexplength, 1).float()
 
     #print(m0.shape)
-    model_nelson = massice(depmodel="nelson").float().to(DEVICE)
-    model_nosurfk = massice(depmodel="constant", c=1.0).float().to(DEVICE)
+    #model_nelson = massice(depmodel="nelson").float().to(DEVICE)
+    #model_nosurfk = massice(depmodel="constant", c=1.0).float().to(DEVICE)
+    model_nelson = massice(physics="strong", depmodel="nelson").float().to(DEVICE)
+    model_nosurfk = massice(physics="weak", gmodel="spherical").float().to(DEVICE)
 
     mass_nelson = model_nelson(m0.to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si).detach()
     mass_nosurfk = model_nosurfk(m0.to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si).detach()
 
-    m0 = m0.unsqueeze(dim=2).expand(mass_nelson.shape)
+    m0s = m0.unsqueeze(dim=2).expand(mass_nelson.shape)
 
     # synthetic data sets
-    predmasses_nelson = (mass_nelson / m0)[:, :, 0]
-    predmasses_nosurfk = (mass_nosurfk / m0)[:, :, 0]
+    predmasses_nelson = (mass_nelson / m0s)[:, :, 0]
+    predmasses_nosurfk = (mass_nosurfk / m0s)[:, :, 0]
 
     # real data sets
     massratios = massratio.cpu().detach()
@@ -81,7 +81,7 @@ def getsyntheticdata(traindata,nonoise=False,saveplots=False):
         if saveplots==True:
             plotsynthetic(traindata,predmassesReal,predmasses_nelson,massratiosnoise)
 
-    alpha_nelson = model_nelson.dmidt.alphas(Temp, Si)
+    alpha_nelson = model_nelson.dmidt.gmodel.dtermmodel.alpha(Si,Temp)
     plotsynoverview(Temp, Si, alpha_nelson, predmassesReal)
 
     return predmassesReal,alpha_nelson

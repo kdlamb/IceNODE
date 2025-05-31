@@ -33,6 +33,7 @@ from plotting import compare_mratios_grid,plot_alpha_fits, plot_Gc_fits,plot_Gc_
 from models import massice
 from data_utils import getname
 
+from constants import constants,expranges
 
 def evaluate_models(args, traindata, massratio_real, model, learnedfunction, comparisonmodel=None, comparisonname=None):
     #
@@ -46,12 +47,11 @@ def evaluate_models(args, traindata, massratio_real, model, learnedfunction, com
     P = traindata.P.unsqueeze(dim=1).float().to(DEVICE)
     r0 = traindata.r0
 
-    RHOICE = 910.0
-    m0 = 4 / 3 * math.pi * RHOICE * r0 ** 3
+    m0 = 4 / 3 * math.pi * constants.RHOICE * r0 ** 3
     m0 = m0.unsqueeze(dim=1)
 
-    model_nelson = massice(depmodel="nelson").float().to(DEVICE)
-    model_nosurfk = massice(depmodel="constant", c=1.0).float().to(DEVICE)
+    model_nelson = massice(physics="strong", depmodel="nelson").float().to(DEVICE)
+    model_nosurfk = massice(physics="weak", gmodel="spherical").float().to(DEVICE)
 
     #calculate models at different lengths
     evallengths = [500,1000,1500]
@@ -85,8 +85,16 @@ def evaluate_models(args, traindata, massratio_real, model, learnedfunction, com
         modelnames = ["Current","Nelson","No Surf. K."]
 
         # Integrating model with symbolic regression expression
-        if args.strong == True:
-            model_SR = massice(depmodel="SR",learnedfunction=learnedfunction).float().to(DEVICE)
+        if args.physics == "strong":
+            model_SR = massice(physics=args.physics, depmodel="SR", learnedfunction=learnedfunction).float().to(DEVICE)
+            mass_SR = model_SR(m0.to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si).detach()
+            m0s = m0.unsqueeze(dim=2).expand(mass_SR.shape)
+            massratios_SR = (mass_SR.cpu().detach() / m0s)[:, :, 0]
+
+            massratios.append(massratios_SR)
+            modelnames.append("Best SR")
+        elif args.physics == "medium":
+            model_SR = massice(physics=args.physics, dtermmodel="SR",learnedfunction=learnedfunction).float().to(DEVICE)
             mass_SR = model_SR(m0.to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si).detach()
             m0s = m0.unsqueeze(dim=2).expand(mass_SR.shape)
             massratios_SR = (mass_SR.cpu().detach() / m0s)[:, :, 0]
@@ -94,7 +102,7 @@ def evaluate_models(args, traindata, massratio_real, model, learnedfunction, com
             massratios.append(massratios_SR)
             modelnames.append("Best SR")
         else:
-            model_SR = massice(geffmodel="SR",learnedfunction=learnedfunction,strong=False).float().to(DEVICE)
+            model_SR = massice(physics=args.physics, gmodel="SR",learnedfunction=learnedfunction).float().to(DEVICE)
             mass_SR = model_SR(m0.to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si).detach()
             m0s = m0.unsqueeze(dim=2).expand(mass_SR.shape)
             massratios_SR = (mass_SR.cpu().detach() / m0s)[:, :, 0]
