@@ -1,11 +1,9 @@
 # IceNODE
 ![IceNode](Overview.png "Overview of NODE method")
 
-This github repo provides the analysis and code for a scientific machine learning analysis of depositional ice growth models. 
-Here we explore how neural ordinary differential equations and equation discovery can be applied to observations of times series of the mass of single ice crystals grown in a levitation diffusion chamber.
-
 ## Overview
-This repo contains a PyTorch implementation of the code for the paper "Discovering How Ice Crystals Grow Using Neural Ordinary Differential Equations and Symbolic Regression"
+This github repo provides the analysis and code for a scientific machine learning analysis of depositional ice growth models. We provide a PyTorch implementation of the code for the paper "Discovering How Ice Crystals Grow Using Neural Ordinary Differential Equations and Symbolic Regression".  
+Here we explore how neural ordinary differential equations and equation discovery can be applied to observations of times series of the mass of single ice crystals grown in a levitation diffusion chamber.
 
 ## Content
 - [Data Preparation](#data-preparation)
