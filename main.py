@@ -7,6 +7,7 @@ import math
 import pandas as pd
 
 import torch
+import xarray as xr
 from torch.utils.data import Subset
 from torch.utils.data import DataLoader
 import torch.nn as nn
@@ -30,18 +31,21 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-from data_utils import levdiffdata, SSA, getname,SubsetWithAttrs
+from data_utils import levdiffdata, SSA, getname,SubsetWithAttrs, save_df
 from synthetic_data import getsyntheticdata
 from models import massice
 from train import trainmodels
 from model_comparison import evaluate_models
+from plotting import plot_sr_scores, plot_complexity_loss
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Training Loop")
 
     parser.add_argument("-s", "--synthetic", action='store_true', help="use synthetic data (default = True)")
+    parser.add_argument("-l1", "--L1loss", action='store_true', help="use synthetic data (default = True)")
+
     parser.add_argument("-nn", "--nonoise", action='store_true', help="don't add noise to synthetic data")
-    parser.add_argument('-p', "--physics", default='strong', type=str, help="train strong (weak) model (default = True)")
+    parser.add_argument('-p', "--physics", default='strong', type=str, help="train strong (weak, medium) model (default = True)")
 
     parser.add_argument("-n", "--num_iterations", default=1000, type=int, help="number of training epochs (default = 1000)")
     parser.add_argument("-lr", "--base_lr", default=0.01, type=float, help="initial learning rate (default = 0.01)")
@@ -55,6 +59,10 @@ if __name__ == "__main__":
     parser.add_argument("--randomseed",default=42,help="random seed (default = 42)")
     parser.add_argument("--exclude",action='store_true', help = "exclude bad experiments in training data")
     parser.add_argument("--allpoints",action='store_true', help = "include every 50th point when fitting SR for weak case")
+    parser.add_argument("--firstpoints",action='store_true', help = "include first 10 points when fitting SR for weak case")
+    parser.add_argument("--nucleation",action='store_true', help = "include nucleation in model")
+    parser.add_argument("-a","--append",default='', type=str, help="string to append to file names.")
+    parser.add_argument("-aSR", "--appendSR", default='', type=str, help="string to append to file names for SR only.")
 
     args = parser.parse_args()
 
@@ -73,6 +81,8 @@ if __name__ == "__main__":
         traindata = SubsetWithAttrs(traindata, include_indices)
 
     name = getname(args)
+
+    print("Current name: ",name)
     print("# Experiments: ",len(traindata))
 
     # use synthetic data that assumes the Nelson and Baker parameterization
@@ -101,47 +111,72 @@ if __name__ == "__main__":
             model = massice(physics=args.physics, gmodel="NN").float().to(DEVICE)
         #dirpath = "/Users/karalamb/Columbia/Projects/DepositionalIce/IceSciML"
         #model.load_state_dict(torch.load(os.path.join(dirpath,"Real_weakNODE500_L2unscaled_mscaled_noharrison.pt")))
+        model.load_state_dict(checkpoint['model_state_dict'])
     else:
         print("Start training")
         model = trainmodels(args,traindata,massratio)
 
     # evaluate the model - move this after PySR fits and evaluate the fit expressions too.
     print("Evaluating the model")
-    df = evaluate(args,traindata,massratio,model)
-
+    df = evaluate(args,traindata,massratio,model,saveplot=False)
+    save_df(df,name)
 
     # fit symbolic expressions
     print("Fitting symbolic expression")
+    nit = 10000 #1000
     if args.physics == "strong":
-        pysrmodule = fit_alpha(df,name,loadfile=args.loadSR)
+        pysrmodule = fit_alpha(df,name,args,niterations = nit)
     elif args.physics == "medium":
         if args.allpoints:
             name = name+"_allpoints"
-        pysrmodule = fit_dterm(df,name,loadfile=args.loadSR)
+        pysrmodule = fit_dterm(df,name,args,niterations = nit)
     else:
         if args.allpoints:
             name = name+"_allpoints"
-        pysrmodule = fit_gc(df,name,loadfile=args.loadSR)
+        if args.appendSR is not None:
+            name = name + args.appendSR
+        pysrmodule = fit_gc(df,name,args,niterations = nit)
+
+    # Plot figures for SR
+    plot_sr_scores(pysrmodule, name)
 
     # # print off interpolation and extrapolation results for models (Table 1)
+    print("Evaluating the model")
+    df = evaluate(args,traindata,massratio,model,saveplot=True,learnedfunction = pysrmodule.pytorch())
+
     print("Comparing models")
 
-    best = False
+    dfs = {}
+    best = True
     if best == True:
         learnedfunction = pysrmodule.pytorch()
-        evaluate_models(args, traindata, massratio, model, learnedfunction)
+        df = evaluate_models(args, traindata, massratio, model, learnedfunction)
     else:
         nsr = len(pysrmodule.equations_)
         #
-        for i in range(1,nsr): # ignore the 1st in case it is a constant.
+        for i in range(1,nsr): # ignore the 1st couple in case they are constants.
             print(i,pysrmodule.equations_['score'][i],pysrmodule.equations_['loss'][i],pysrmodule.equations_['complexity'][i])
             print(pysrmodule.sympy(i))
         #
             learnedfunction = pysrmodule.pytorch(i)
-            evaluate_models(args,traindata,massratio,model,learnedfunction)
+            df = evaluate_models(args,traindata,massratio,model,learnedfunction)
+
+            if i==1:
+                df_all = df
+
+            else:
+                df_all = pd.concat([df_all,df],ignore_index=True)
+
+        dirname = "Comparisons"
+        plotname = getname(args)
+        dfname = os.path.join(dirname, plotname + "_model_comparisons.csv")
+        df_all.to_csv(dfname,index=False)
+        #print(df_all.head())
+        #print(df_all.columns)
+        plot_complexity_loss(df_all, name, pysrmodule, savefig=True)
 
 
 
-    # comparison with AIDA experiments
+    # comparison with AIDA experiments - use symbolic regression expression in AIDA model
 
 

@@ -11,7 +11,6 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 from constants import constants,expranges
 
-
 # alpha models
 class constantalpha(nn.Module):
     def __init__(self, c=1.0):
@@ -107,10 +106,18 @@ class alphaNN(nn.Module):
         torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
         torch.nn.init.ones_(self.lin.bias)
 
+        self.nnscaled = False
+
     def forward(self, S, T):
         # do the normalization here
-        Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
-        RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
+
+        if (self.nnscaled == True) and (self.learnedalpha is not None):
+            Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
+            RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
+        else:
+            Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
+            RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
+
         x = torch.concatenate((Tscaled, RHscaled), dim=1)
 
         if self.learnedalpha is not None:
@@ -138,24 +145,40 @@ class dtermNN(nn.Module):
         torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
         torch.nn.init.ones_(self.lin.bias)
 
+        self.mlogscaled = True
+        self.nnscaled = False
+
     def forward(self, m, T, S):
         # rescalings
         # scale these the same as the NN?
 
         Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
         RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
-        mscaled = (torch.log(m).float() - expranges.minm0) / expranges.m0range
-
-        x = torch.concatenate((mscaled, Tscaled, RHscaled), dim=1)
+        if self.mlogscaled == True:
+            mscaled = (torch.log(m).float() - expranges.minm0_log) / expranges.m0range_log
+        else:
+            mscaled = (m.float() - expranges.minm0) / expranges.m0range
 
         D, K = self.dterm(m, T, S)
+        if (self.nnscaled == False) and (self.learneddterm is not None):
+            radius = (3 * m.float() / (4 * math.pi * constants.RHOICE)) ** (1 / 3)
+            rscaled = radius * 1e6
+            mscaled = m.float() * 1e12
+            Tscaled = T.float()
+            RHscaled = S.float() - 1.0
+            Dsphscaled = D*1e6
+
+
         if self.learneddterm is not None:
-            Dtermratio = self.learneddterm(x).unsqueeze(dim=1)
+            x = torch.concatenate((rscaled,mscaled, Tscaled, RHscaled,Dsphscaled), dim=1)
+            Deff = self.learneddterm(x).unsqueeze(dim=1)*1e-6
         else:
+            x = torch.concatenate((mscaled, Tscaled, RHscaled), dim=1)
             Dtermratio = (nn.Sigmoid()(self.lin(self.layers(x)))) * 2.0  # 20.0
             #Dtermratio = (nn.Softplus()(self.lin(self.layers(x))))
+            Deff = Dtermratio * D
 
-        return Dtermratio * D, K
+        return Deff, K
 class geffNN(nn.Module):
     def __init__(self, input_dim=3, output_dim=1, nhidden=20, learnedfunction=None):
         super(geffNN, self).__init__()
@@ -173,23 +196,46 @@ class geffNN(nn.Module):
         torch.nn.init.normal_(self.lin.weight, mean=0.0, std=0.5)
         torch.nn.init.ones_(self.lin.bias)
 
+        self.mlogscaled = True
+
     def forward(self, m, T, S):
         # rescalings
         # scale these the same as the NN?
 
         Tscaled = (T.float() - expranges.minTemp) / expranges.Temprange
         RHscaled = (S.float() - expranges.minSi) / expranges.Sirange
-        mscaled = (torch.log(m).float() - expranges.minm0) / expranges.m0range
+
+        if self.mlogscaled == True:
+            mscaled = (torch.log(m).float() - expranges.minm0_log) / expranges.m0range_log
+        else:
+            mscaled = (m.float() - expranges.minm0) / expranges.m0range
+
+        nnscaled = False
+
+        if (nnscaled == False) and (self.learnedgeff is not None):
+            radius = (3 * m.float() / (4 * math.pi * constants.RHOICE)) ** (1 / 3)
+            rscaled = radius * 1e6
+            mscaled = m.float() * 1e12
+            Tscaled = T.float() #/ 273.15
+            RHscaled = S.float()- 1.0
+
         #print(torch.min(T),torch.min(S),torch.min(m))
         #print(torch.min(Tscaled),torch.min(RHscaled),torch.min(mscaled))
         x = torch.concatenate((mscaled, Tscaled, RHscaled), dim=1)
+        Gc = self.gsph(m, T, S)
 
         if self.learnedgeff is not None:
+            Gcscaled = Gc*1e9
+            x = torch.concatenate((mscaled, Tscaled, RHscaled,Gcscaled), dim=1)
+            #x = torch.concatenate((rscaled,Tscaled, RHscaled), dim=1)
             Geffratio = self.learnedgeff(x).unsqueeze(dim=1)
+            #Geff = Geffratio*Gc
+            Geff = Geffratio*1e-9
         else:
             Geffratio = (nn.Sigmoid()(self.lin(self.layers(x)))) * 2.0  # 20.0
+            Geff = Geffratio*Gc
 
-        return Geffratio*self.gsph(m, T, S)
+        return Geff
 class dterm(nn.Module):
     def __init__(self, translational=False, depmodel="nelson", sc="h2016", m=1, c=0.5, learnedfunction=None):
         super(dterm, self).__init__()

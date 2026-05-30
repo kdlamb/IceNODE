@@ -8,7 +8,6 @@ import os
 import pandas as pd
 from scipy import interpolate
 
-
 def getname(args):
     if args.synthetic:
         synreal = "Synthetic"
@@ -18,9 +17,29 @@ def getname(args):
     name = "{}_{}_{:04d}".format(synreal, args.physics, args.num_iterations)
     if args.exclude:
         name = name+"_excluded"
+    name = name+args.append
+    if args.L1loss:
+        name = name+"_L1loss"
+    if args.nucleation:
+        name = name+"_nucleation"
 
     print(name)
     return name
+def save_df(df, name):
+    """
+    Save a pandas DataFrame to CSV.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame to save.
+    name : str
+        Output filename (without extension).
+    """
+    os.makedirs("Dataframes", exist_ok=True)
+    filepath = os.path.join("Dataframes", f"{name}.csv")
+    df.to_csv(filepath, index=False)
+    print(f"Saved DataFrame to {filepath}")
 class SubsetWithAttrs(Dataset):
     def __init__(self, dataset, indices):
         self.dataset = dataset
@@ -216,3 +235,33 @@ class SSA(object):
 
         plt.xlim(min-0.5, max_rnge+0.5)
         plt.ylim(max_rnge+0.5, min-0.5)
+import pandas as pd
+
+def loadinitialcond():
+    # Load the initial relative humidity to initate the model
+    filename='/Users/karalamb/Columbia/Projects/isocloud/ISOCLOUD04/IsoCloud_parcelmodel/TextExp'
+    #print(filename)
+    #expnum(i),initRI(i),initRItdl(i),offtime
+    # initRItdl is measured by a different water vapor instrument (usually SP-APicT)
+    cols = ['expnum','initRI','initRItdl','offtime']
+    isodata=pd.read_csv(filename,sep='\t',header=None,names=cols)
+    return isodata
+def loadIWC(expn):
+    # Loads the observed IWC, IWC error, Si, and Sierror (These are what the model predicts)
+    filename='/Users/karalamb/Columbia/Projects/isocloud/ISOCLOUD04/IsoCloud_parcelmodel/IWCExp/IWCExp'+str(expn)
+    #print(filename)
+    cols = ['IWC','IWCerror','Si','Sierror']
+    isodata=pd.read_csv(filename,sep='\t',header=None,names=cols)
+    return isodata
+def loadaidainputs(expn):
+    # Load the inputs to the parcel model from the AIDA time series
+    # These are the experimentally measured pressure, temperature, ice number concentration,
+    # and vapor flux from the walls
+    filename = '/Users/karalamb/Columbia/Projects/isocloud/ISOCLOUD04/IsoCloud_parcelmodel/IsoCloud4Merge_Exp' + str(
+        expn)
+    #print(filename)
+    # cols = ['p_pa','dp_hpa','tg_k','dtg_k','cn_ice','vapfluxmr']
+    cols = ['p_pa', 'dp_hpa', 'tg_k', 'dtg_k', 'cn_ice', 'dvap_flux', 'qv_kgkg', 'dqv_kgkg', 'Si']
+    isodata = pd.read_csv(filename, sep='\t', header=None, names=cols)
+
+    return isodata

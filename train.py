@@ -61,13 +61,18 @@ def trainmodels(args,traindata,massratio):
     decay = args.decay
     nexps = len(traindata)
     maxexplength = args.maxexplength
-    loss1 = nn.MSELoss(reduction="none")
+
+    if args.L1loss == True:
+        loss1 = nn.L1Loss(reduction="none")
+    else:
+        loss1 = nn.MSELoss(reduction="none")
 
     massratio = massratio.float().to(DEVICE)
     Temp = traindata.T.unsqueeze(dim=1).float().to(DEVICE)
     Si = traindata.Si.unsqueeze(dim=1).float().to(DEVICE)
     P = traindata.P.unsqueeze(dim=1).float().to(DEVICE)
     r0 = traindata.r0
+    nucleation = traindata.nucleation.unsqueeze(dim=1).float().to(DEVICE)
 
     m0 = 4 / 3 * math.pi * constants.RHOICE * r0 ** 3
     m0 = m0.unsqueeze(dim=1)
@@ -103,7 +108,10 @@ def trainmodels(args,traindata,massratio):
     for itr in tqdm(range(num_iterations)):
         optimizer.zero_grad()
 
-        mass = model(m0.float().to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si)
+        if args.nucleation:
+            mass = model(m0.float().to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si,nucleation)
+        else:
+            mass = model(m0.float().to(DEVICE), time.squeeze(dim=0).to(DEVICE), Temp, Si)
 
         morig = m0.unsqueeze(dim=2).expand(mass.shape)
         predmasses = (mass / morig)[:, :, 0]

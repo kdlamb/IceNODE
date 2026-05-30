@@ -39,7 +39,10 @@ def evaluate_models(args, traindata, massratio_real, model, learnedfunction, com
     #
     nexps = len(traindata)
     maxexplength = args.maxexplength
-    loss1 = nn.MSELoss(reduction="none")
+    if args.L1loss:
+        loss1 = nn.L1Loss(reduction="none")
+    else:
+        loss1 = nn.MSELoss(reduction="none")
 
     massratio = massratio_real.float().to(DEVICE)
     Temp = traindata.T.unsqueeze(dim=1).float().to(DEVICE)
@@ -125,16 +128,20 @@ def evaluate_models(args, traindata, massratio_real, model, learnedfunction, com
             mselosses[i,j] = lossODE.item()
             lossesbyexps[:,i,j] = lossbyexp.detach().numpy()
 
-    minloss = np.argmin(lossesbyexps[:,0,:], axis=1)
-    unique_values, counts = np.unique(minloss, return_counts=True)
-    bestexps = np.zeros(nmodels)
-    bestexps[unique_values] = counts
-
     df = pd.DataFrame(mselosses.T, index=modelnames, columns=evallengths)
-    df["# Best (500)"] = bestexps
-    df["% Best (500)"] = 100*bestexps/nexps
+    for i in range(len(evallengths)):
+
+        minloss = np.nanargmin(lossesbyexps[:,i,0:3], axis=1)
+        minloss_sr = np.nanargmin(lossesbyexps[:, i, 1:], axis=1)
+        unique_values, counts = np.unique(minloss, return_counts=True)
+        unique_values_sr, counts_sr = np.unique(minloss_sr, return_counts=True)
+        bestexps = np.zeros(nmodels)
+        bestexps[unique_values] = counts
+        bestexps[-1] = counts_sr[-1]
+
+        df["# Best ({:.0f})".format(evallengths[i])] = bestexps
+        df["% Best ({:.0f})".format(evallengths[i])] = 100*bestexps/nexps
     pd.options.display.float_format = '{:.2f}'.format
     print(df)
 
-
-
+    return df
