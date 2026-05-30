@@ -26,11 +26,10 @@ used in the NODE model. The [torchdiffeq library](https://github.com/rtqichen/to
 ## Citation
 The preprint for this paper can be found at:
 ```
-@article{Lamb2025,
-  title={Discovering How Ice Crystals Grow Using Neural Ordinary Differential Equations and Symbolic Regression},
-  author={Lamb, K.D. and J. Harrington},
-  journal={},
-  doi = {DOI:},
+@article{lamb2025discovering,
+  title={Discovering How Ice Crystals Grow Using Neural ODE's and Symbolic Regression},
+  author={Lamb, Kara D and Harrington, Jerry Y and Moyle, Alfred M and Pokrifka, Gwenore F and Clouser, Benjamin W and Ebert, Volker and M{\"o}hler, Ottmar and Saathoff, Harald},
+  journal={arXiv preprint arXiv:2510.17935},
   year={2025}
 }
 ```
